@@ -3,8 +3,7 @@ const bodyParser = require('body-parser')
 const log = require('./log')
 const argv = require('minimist')(process.argv.slice(2))
 
-var app = express()
-var appWs = require('express-ws')(app)
+var WebSocket = require('ws')
 var port = 2407
 
 const minoTypes = [
@@ -240,6 +239,7 @@ Game.prototype.newMino = function() {
 	this.addNextMino()
 	if (this.minoSeq.length<=0) this.minoSeq = shuffle([0,1,2,3,4,5,6])
 	if (this.collision(this.curMino)) this.lose()
+	else this.newGhostMino()
 }
 
 Game.prototype.addNextMino = function() {
@@ -272,7 +272,7 @@ Game.prototype.setGhostPos = function() {
 }
 
 Game.prototype.sendData = function(act,data) {
-	if (this.ws.state != 1) return
+	if (this.state != 1) return
 
 	var code
 	switch (act) {
@@ -329,10 +329,10 @@ Game.prototype.sendData = function(act,data) {
 Game.prototype.lock = function() {
 	var curMinoInfo = minoTypes[this.curMino.type]
 	curMinoInfo.shape.forEach((e,i,a)=>{
-		var blockPos = getBlockPos(e,this.curMino.pos,curMinoInfo.center,this.curMino.rotate)
+		var blockPos = this.getBlockPos(e,this.curMino.pos,curMinoInfo.center,this.curMino.rotate)
 		var x = blockPos[0]
 		var y = blockPos[1]
-		playfield[y][x].type = this.curMino.type
+		this.playfield[y][x] = this.curMino.type
 	})
 	this.sendData('lock',[0x00,0x00,0x00,0x00])
 	this.checkFull()
@@ -372,12 +372,14 @@ Game.prototype.moveLeft = function() {
 	var t = this.curMino.pos[0]
 	this.curMino.pos[0] --
 	if (this.collision(this.curMino)) this.curMino.pos[0] = t
+	this.setGhostPos()
 }
 
 Game.prototype.moveRight = function() {
 	var t = this.curMino.pos[0]
 	this.curMino.pos[0] ++
 	if (this.collision(this.curMino)) this.curMino.pos[0] = t
+	this.setGhostPos()
 }
 
 Game.prototype.kick = function(type,x,ct) {
@@ -385,7 +387,7 @@ Game.prototype.kick = function(type,x,ct) {
 	var u = this.curMino.pos
 	for (e of curMinoInfo.kick[x][ct>0?0:1]) {
 		this.curMino.pos = [u[0]+e[0],u[1]+e[1]]
-		if (!collision(this.curMino)) return true
+		if (!this.collision(this.curMino)) return true
 	}
 	this.curMino.pos = u
 	return false
@@ -396,8 +398,9 @@ Game.prototype.rotate = function(ct) { // TO FIX
 	var u = this.curMino.pos
 	this.curMino.rotate = (this.curMino.rotate+4+ct)%4
 	if (this.collision(this.curMino)) {
-		if (!kick(this.curMino.type,t,ct)) this.curMino.rotate = t
+		if (!this.kick(this.curMino.type,t,ct)) this.curMino.rotate = t
 	}
+	this.setGhostPos()
 }
 
 Game.prototype.rotateCw = function(ct) {
@@ -420,10 +423,9 @@ Game.prototype.hardDrop = function() {
 	while (!this.collision(this.curMino)) {
 		t = this.curMino.pos[1]
 		this.curMino.pos[1] --
-		console.log(this.curMino.type)
 	}
 	this.curMino.pos[1] = t
-	lock ()
+	this.lock ()
 }
 
 Game.prototype.collision = function(cur) {
@@ -434,12 +436,11 @@ Game.prototype.collision = function(cur) {
 		var blockPos = this.getBlockPos(e,cur.pos,curMinoInfo.center,cur.rotate)
 		var x = blockPos[0]
 		var y = blockPos[1]
-		console.log(x,y)
 		if (x<0||y<0||y>22||x>9) {
 			flag = true
 			return
 		}
-		if (this.playfield[y][x].type != -1) {
+		if (this.playfield[y][x] != -1) {
 			flag = true
 			return
 		}
@@ -452,14 +453,9 @@ Game.prototype.lose = function() {
 	this.stateFunction = idle
 }
 
+const ws = new WebSocket.Server({port: port})
 
-
-app.use((req,res,next)=>{
-	res.header('Access-Control-Allow-Origin', '*')
-	next()
-})
-
-app.ws('/', function(ws, req) {
+ws.on('connection', ws=>{
 	var game = new Game(ws)
 	ws.on('message', msg=>{
 		var buf = Buffer.from(msg)
@@ -483,7 +479,8 @@ app.ws('/', function(ws, req) {
 		game = null
 	})
 })
-
+/*
 app.listen(port, ()=>{
 	log.printLog('info','Listening on port ' + (port+'').cyan)
 })
+*/
